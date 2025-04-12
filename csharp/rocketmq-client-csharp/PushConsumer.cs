@@ -32,7 +32,7 @@ using Microsoft.Extensions.Logging;
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]
 namespace Org.Apache.Rocketmq
 {
-    public class PushConsumer : Consumer, IAsyncDisposable, IDisposable
+    public partial class PushConsumer : Consumer, IAsyncDisposable, IDisposable
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<PushConsumer>();
 
@@ -96,12 +96,12 @@ namespace Org.Apache.Rocketmq
             try
             {
                 State = State.Starting;
-                Logger.LogInformation($"Begin to start the rocketmq push consumer, clientId={ClientId}");
+                LogMessages.LogStart(Logger, ClientId);
                 await base.Start();
                 _consumeService = CreateConsumerService();
                 ScheduleWithFixedDelay(ScanAssignments, AssignmentScanScheduleDelay, AssignmentScanSchedulePeriod,
                     _scanAssignmentCts.Token);
-                Logger.LogInformation($"The rocketmq push consumer starts successfully, clientId={ClientId}");
+                LogMessages.LogStartSuccess(Logger, ClientId);
                 State = State.Running;
             }
             catch (Exception)
@@ -128,7 +128,7 @@ namespace Org.Apache.Rocketmq
             try
             {
                 State = State.Stopping;
-                Logger.LogInformation($"Begin to shutdown the rocketmq push consumer, clientId={ClientId}");
+                LogMessages.LogShutdown(Logger, ClientId);
                 _receiveMsgCts.Cancel();
                 _ackMsgCts.Cancel();
                 _changeInvisibleDurationCts.Cancel();
@@ -136,7 +136,7 @@ namespace Org.Apache.Rocketmq
                 _scanAssignmentCts.Cancel();
                 await base.Shutdown();
                 _consumptionCts.Cancel();
-                Logger.LogInformation($"Shutdown the rocketmq push consumer successfully, clientId={ClientId}");
+                LogMessages.LogShutdownSuccess(Logger, ClientId);
                 State = State.Terminated;
             }
             catch (Exception)
@@ -150,12 +150,10 @@ namespace Org.Apache.Rocketmq
         {
             if (_pushSubscriptionSettings.IsFifo())
             {
-                Logger.LogInformation(
-                    $"Create FIFO consume service, consumerGroup={_consumerGroup}, clientId={ClientId}");
+                LogMessages.LogCreateFifoConsumeService(Logger, _consumerGroup, ClientId);
                 return new FifoConsumeService(ClientId, _messageListener, _consumptionTaskScheduler, _consumptionCts.Token);
             }
-            Logger.LogInformation(
-                $"Create standard consume service, consumerGroup={_consumerGroup}, clientId={ClientId}");
+            LogMessages.LogCreateStandardConsumeService(Logger, _consumerGroup, ClientId);
             return new StandardConsumeService(ClientId, _messageListener, _consumptionTaskScheduler, _consumptionCts.Token);
         }
 
@@ -194,7 +192,6 @@ namespace Org.Apache.Rocketmq
             {
                 throw new InvalidOperationException("Push consumer is not running");
             }
-
             _subscriptionExpressions.TryRemove(topic, out _);
         }
 
@@ -202,7 +199,7 @@ namespace Org.Apache.Rocketmq
         {
             try
             {
-                Logger.LogDebug($"Start to scan assignments periodically, clientId={ClientId}");
+                LogMessages.LogScanAssignmentsStart(Logger, ClientId);
                 foreach (var (topic, filterExpression) in _subscriptionExpressions)
                 {
                     var existed = _cacheAssignments.GetValueOrDefault(topic);
@@ -212,8 +209,7 @@ namespace Org.Apache.Rocketmq
                     {
                         if (task.IsFaulted)
                         {
-                            Logger.LogError(task.Exception, "Exception raised while scanning the assignments," +
-                                                            $" topic={topic}, clientId={ClientId}");
+                            LogMessages.LogScanAssignmentsFailure(Logger, topic, ClientId, task.Exception);
                             return;
                         }
 
@@ -222,27 +218,20 @@ namespace Org.Apache.Rocketmq
                         {
                             if (existed == null || existed.GetAssignmentList().Count == 0)
                             {
-                                Logger.LogInformation("Acquired empty assignments from remote, would scan later," +
-                                                      $" topic={topic}, clientId={ClientId}");
+                                LogMessages.LogEmptyAssignmentsAcquired(Logger, topic, ClientId);
                                 return;
                             }
-
-                            Logger.LogInformation("Attention!!! acquired empty assignments from remote, but" +
-                                                  $" existed assignments are not empty, topic={topic}," +
-                                                  $" clientId={ClientId}");
+                            LogMessages.LogEmptyAssignmentsWarning(Logger, topic, ClientId);
                         }
 
                         if (!latest.Equals(existed))
                         {
-                            Logger.LogInformation($"Assignments of topic={topic} has changed, {existed} =>" +
-                                                  $" {latest}, clientId={ClientId}");
+                            LogMessages.LogAssignmentsChanged(Logger, topic, existed, latest, ClientId);
                             SyncProcessQueue(topic, latest, filterExpression);
                             _cacheAssignments[topic] = latest;
                             return;
                         }
-
-                        Logger.LogDebug($"Assignments of topic={topic} remain the same," +
-                                        $" assignments={existed}, clientId={ClientId}");
+                        LogMessages.LogAssignmentsSame(Logger, topic, existed, ClientId);
                         // Process queue may be dropped, need to be synchronized anyway.
                         SyncProcessQueue(topic, latest, filterExpression);
                     }, TaskContinuationOptions.ExecuteSynchronously);
@@ -250,7 +239,7 @@ namespace Org.Apache.Rocketmq
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, $"Exception raised while scanning the assignments for all topics, clientId={ClientId}");
+                LogMessages.LogScanAllAssignmentsFailure(Logger, ClientId, ex);
             }
         }
 
@@ -273,16 +262,14 @@ namespace Org.Apache.Rocketmq
 
                 if (!latest.Contains(mq))
                 {
-                    Logger.LogInformation($"Drop message queue according to the latest assignmentList," +
-                                          $" mq={mq}, clientId={ClientId}");
+                    LogMessages.LogDropMqAccordingToAssignment(Logger, mq, ClientId);
                     DropProcessQueue(mq);
                     continue;
                 }
 
                 if (pq.Expired())
                 {
-                    Logger.LogWarning($"Drop message queue because it is expired," +
-                                      $" mq={mq}, clientId={ClientId}");
+                    LogMessages.LogDropMqExpired(Logger, mq, ClientId);
                     DropProcessQueue(mq);
                     continue;
                 }
@@ -298,7 +285,7 @@ namespace Org.Apache.Rocketmq
                 var processQueue = CreateProcessQueue(mq, filterExpression);
                 if (processQueue != null)
                 {
-                    Logger.LogInformation($"Start to fetch message from remote, mq={mq}, clientId={ClientId}");
+                    LogMessages.LogStartFetchMessage(Logger, mq, ClientId);
                     processQueue.FetchMessageImmediately();
                 }
             }
@@ -521,8 +508,7 @@ namespace Org.Apache.Rocketmq
             }
             catch (Exception e)
             {
-                Logger.LogError(e,
-                    $"Failed to send message verification result command, endpoints={Endpoints}, command={telemetryCommand}, messageId={messageId}, clientId={ClientId}");
+                LogMessages.LogFailedToSendVerificationResult(Logger, endpoints, telemetryCommand, messageId, ClientId);
             }
         }
 
@@ -625,8 +611,8 @@ namespace Org.Apache.Rocketmq
             public Builder SetConsumerGroup(string consumerGroup)
             {
                 Preconditions.CheckArgument(null != consumerGroup, "consumerGroup should not be null");
-                Preconditions.CheckArgument(consumerGroup != null && ConsumerGroupRegex.Match(consumerGroup).Success,
-                    $"topic does not match the regex {ConsumerGroupRegex}");
+                Preconditions.CheckArgument(consumerGroup != null && ConsumerGroupRegex().Match(consumerGroup).Success,
+                    $"topic does not match the regex {ConsumerGroupRegex()}");
                 _consumerGroup = consumerGroup;
                 return this;
             }
@@ -686,6 +672,60 @@ namespace Org.Apache.Rocketmq
                 await pushConsumer.Start();
                 return pushConsumer;
             }
+        }
+        
+        private static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 200, Level = LogLevel.Information, Message = "Begin to start the rocketmq push consumer, clientId={ClientId}")]
+            public static partial void LogStart(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 201, Level = LogLevel.Information, Message = "The rocketmq push consumer starts successfully, clientId={ClientId}")]
+            public static partial void LogStartSuccess(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 202, Level = LogLevel.Information, Message = "Begin to shutdown the rocketmq push consumer, clientId={ClientId}")]
+            public static partial void LogShutdown(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 203, Level = LogLevel.Information, Message = "Shutdown the rocketmq push consumer successfully, clientId={ClientId}")]
+            public static partial void LogShutdownSuccess(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 204, Level = LogLevel.Debug, Message = "Start to scan assignments periodically, clientId={ClientId}")]
+            public static partial void LogScanAssignmentsStart(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 205, Level = LogLevel.Error, Message = "Exception raised while scanning the assignments, topic={Topic}, clientId={ClientId}")]
+            public static partial void LogScanAssignmentsFailure(ILogger logger, string topic, string clientId, Exception exception);
+
+            [LoggerMessage(EventId = 206, Level = LogLevel.Information, Message = "Acquired empty assignments from remote, would scan later, topic={Topic}, clientId={ClientId}")]
+            public static partial void LogEmptyAssignmentsAcquired(ILogger logger, string topic, string clientId);
+
+            [LoggerMessage(EventId = 207, Level = LogLevel.Information, Message = "Attention!!! acquired empty assignments from remote, but existed assignments are not empty, topic={Topic}, clientId={ClientId}")]
+            public static partial void LogEmptyAssignmentsWarning(ILogger logger, string topic, string clientId);
+
+            [LoggerMessage(EventId = 208, Level = LogLevel.Information, Message = "Assignments of topic={Topic} has changed, {Existed} => {Latest}, clientId={ClientId}")]
+            public static partial void LogAssignmentsChanged(ILogger logger, string topic, Assignments existed, Assignments latest, string clientId);
+
+            [LoggerMessage(EventId = 209, Level = LogLevel.Debug, Message = "Assignments of topic={Topic} remain the same, assignments={Existed}, clientId={ClientId}")]
+            public static partial void LogAssignmentsSame(ILogger logger, string topic, Assignments existed, string clientId);
+
+            [LoggerMessage(EventId = 210, Level = LogLevel.Information, Message = "Drop message queue according to the latest assignmentList, mq={Mq}, clientId={ClientId}")]
+            public static partial void LogDropMqAccordingToAssignment(ILogger logger, MessageQueue mq, string clientId);
+
+            [LoggerMessage(EventId = 211, Level = LogLevel.Warning, Message = "Drop message queue because it is expired, mq={Mq}, clientId={ClientId}")]
+            public static partial void LogDropMqExpired(ILogger logger, MessageQueue mq, string clientId);
+
+            [LoggerMessage(EventId = 212, Level = LogLevel.Information, Message = "Start to fetch message from remote, mq={Mq}, clientId={ClientId}")]
+            public static partial void LogStartFetchMessage(ILogger logger, MessageQueue mq, string clientId);
+
+            [LoggerMessage(EventId = 213, Level = LogLevel.Information, Message = "Create FIFO consume service, consumerGroup={ConsumerGroup}, clientId={ClientId}")]
+            public static partial void LogCreateFifoConsumeService(ILogger logger, string consumerGroup, string clientId);
+
+            [LoggerMessage(EventId = 214, Level = LogLevel.Information, Message = "Create standard consume service, consumerGroup={ConsumerGroup}, clientId={ClientId}")]
+            public static partial void LogCreateStandardConsumeService(ILogger logger, string consumerGroup, string clientId);
+
+            [LoggerMessage(EventId = 215, Level = LogLevel.Error, Message = "Exception raised while scanning the assignments for all topics, clientId={ClientId}")]
+            public static partial void LogScanAllAssignmentsFailure(ILogger logger, string clientId, Exception exception);
+
+            [LoggerMessage(EventId = 216, Level = LogLevel.Information, Message = "Failed to send message verification result command, endpoints={Endpoints}, command={Command}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void LogFailedToSendVerificationResult(ILogger logger, Endpoints endpoints, TelemetryCommand command, string messageId, string clientId);
         }
     }
 }

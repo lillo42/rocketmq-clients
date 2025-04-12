@@ -31,7 +31,7 @@ using Org.Apache.Rocketmq.Error;
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]
 namespace Org.Apache.Rocketmq
 {
-    public class Producer : Client, IAsyncDisposable, IDisposable
+    public partial class Producer : Client, IAsyncDisposable, IDisposable
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<Producer>();
         internal readonly ConcurrentDictionary<string /* topic */, PublishingLoadBalancer> _publishingRouteDataCache;
@@ -64,9 +64,9 @@ namespace Org.Apache.Rocketmq
             try
             {
                 State = State.Starting;
-                Logger.LogInformation($"Begin to start the rocketmq producer, clientId={ClientId}");
+                LogMessages.ProducerStart(Logger, ClientId);
                 await base.Start();
-                Logger.LogInformation($"The rocketmq producer starts successfully, clientId={ClientId}");
+                LogMessages.ProducerStartSuccess(Logger, ClientId);
                 State = State.Running;
             }
             catch (Exception)
@@ -93,9 +93,9 @@ namespace Org.Apache.Rocketmq
             try
             {
                 State = State.Stopping;
-                Logger.LogInformation($"Begin to shutdown the rocketmq producer, clientId={ClientId}");
+                LogMessages.ProducerShutdown(Logger, ClientId);
                 await base.Shutdown();
-                Logger.LogInformation($"Shutdown the rocketmq producer successfully, clientId={ClientId}");
+                LogMessages.ProducerShutdownSuccess(Logger, ClientId);
                 State = State.Terminated;
             }
             catch (Exception)
@@ -233,42 +233,30 @@ namespace Org.Apache.Rocketmq
                     var sendReceipt = sendReceipts.First();
                     if (attempt > 1)
                     {
-                        Logger.LogInformation(
-                            $"Re-send message successfully, topic={message.Topic}, messageId={sendReceipt.MessageId}," +
-                            $" maxAttempts={maxAttempts}, endpoints={endpoints}, clientId={ClientId}");
+                        LogMessages.MessageResendSuccess(Logger, message.Topic, sendReceipt.MessageId, maxAttempts, endpoints.ToString(), ClientId);
                     }
-
                     return sendReceipt;
                 }
                 catch (Exception e)
                 {
                     exception = e;
-
                     // Isolate current endpoints.
                     Isolated[endpoints] = true;
                     if (attempt >= maxAttempts)
                     {
-                        Logger.LogError(e, "Failed to send message finally, run out of attempt times, " +
-                                                  $"topic={message.Topic}, maxAttempt={maxAttempts}, attempt={attempt}, " +
-                                                  $"endpoints={endpoints}, messageId={message.MessageId}, clientId={ClientId}");
+                        LogMessages.SendMessageFailureFinally(Logger, e, message.Topic, maxAttempts, attempt, endpoints.ToString(), message.MessageId, ClientId);
                         throw;
                     }
-
                     if (!(exception is TooManyRequestsException))
                     {
                         // Retry immediately if the request is not throttled.
-                        Logger.LogWarning(e, $"Failed to send message, topic={message.Topic}, maxAttempts={maxAttempts}, " +
-                                              $"attempt={attempt}, endpoints={endpoints}, messageId={message.MessageId}," +
-                                              $" clientId={ClientId}");
+                        LogMessages.SendMessageFailure(Logger, e, message.Topic, maxAttempts, attempt, endpoints.ToString(), message.MessageId, ClientId);
                         continue;
                     }
-
                     var nextAttempt = 1 + attempt;
                     var delay = retryPolicy.GetNextAttemptDelay(nextAttempt);
                     await Task.Delay(delay);
-                    Logger.LogWarning(e, "Failed to send message due to too many request, would attempt to resend " +
-                                                $"after {delay}, topic={message.Topic}, maxAttempts={maxAttempts}, attempt={attempt}, " +
-                                                $"endpoints={endpoints}, messageId={message.MessageId}, clientId={ClientId}");
+                    LogMessages.SendMessageTooManyRequests(Logger, e, delay, message.Topic, maxAttempts, attempt, endpoints.ToString(), message.MessageId, ClientId);
                 }
                 finally
                 {
@@ -280,7 +268,6 @@ namespace Org.Apache.Rocketmq
                             null == exception ? MetricConstant.Success : MetricConstant.Failure));
                 }
             }
-
             throw new Exception($"Failed to send message finally, topic={message.Topic}, clientId={ClientId}",
                 exception);
         }
@@ -296,11 +283,9 @@ namespace Org.Apache.Rocketmq
             var messageId = command.Message.SystemProperties.MessageId;
             if (null == _checker)
             {
-                Logger.LogError($"No transaction checker registered, ignore it, messageId={messageId}, " +
-                                       $"transactionId={command.TransactionId}, endpoints={endpoints}, clientId={ClientId}");
+                LogMessages.NoTransactionChecker(Logger, messageId, command.TransactionId, endpoints.ToString(), ClientId);
                 return;
             }
-
             var message = MessageView.FromProtobuf(command.Message);
             var transactionResolution = _checker.Check(message);
             switch (transactionResolution)
@@ -391,11 +376,10 @@ namespace Org.Apache.Rocketmq
                 foreach (var topic in topics)
                 {
                     Preconditions.CheckArgument(null != topic, "topic should not be null");
-                    Preconditions.CheckArgument(topic != null && Message.TopicRegex.Match(topic).Success,
-                        $"topic does not match the regex {Message.TopicRegex}");
+                    Preconditions.CheckArgument(topic != null && Message.TopicRegex().Match(topic).Success,
+                        $"topic does not match the regex {Message.TopicRegex()}");
                     _publishingTopics[topic!] = true;
                 }
-
                 return this;
             }
 
@@ -420,6 +404,36 @@ namespace Org.Apache.Rocketmq
                 await producer.Start();
                 return producer;
             }
+        }
+        
+        public static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 1, Level = LogLevel.Information, Message = "Begin to start the rocketmq producer, clientId={ClientId}")]
+            public static partial void ProducerStart(ILogger logger, string clientId);
+            
+            [LoggerMessage(EventId = 2, Level = LogLevel.Information, Message = "The rocketmq producer starts successfully, clientId={ClientId}")]
+            public static partial void ProducerStartSuccess(ILogger logger, string clientId);
+            
+            [LoggerMessage(EventId = 3, Level = LogLevel.Information, Message = "Begin to shutdown the rocketmq producer, clientId={ClientId}")]
+            public static partial void ProducerShutdown(ILogger logger, string clientId);
+            
+            [LoggerMessage(EventId = 4, Level = LogLevel.Information, Message = "Shutdown the rocketmq producer successfully, clientId={ClientId}")]
+            public static partial void ProducerShutdownSuccess(ILogger logger, string clientId);
+            
+            [LoggerMessage(EventId = 5, Level = LogLevel.Information, Message = "Re-send message successfully, topic={Topic}, messageId={MessageId}, maxAttempts={MaxAttempts}, endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void MessageResendSuccess(ILogger logger, string topic, string messageId, int maxAttempts, string endpoints, string clientId);
+            
+            [LoggerMessage(EventId = 6, Level = LogLevel.Error, Message = "Failed to send message finally, run out of attempt times, topic={Topic}, maxAttempt={MaxAttempts}, attempt={Attempt}, endpoints={Endpoints}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void SendMessageFailureFinally(ILogger logger, Exception ex, string topic, int maxAttempts, int attempt, string endpoints, string messageId, string clientId);
+            
+            [LoggerMessage(EventId = 7, Level = LogLevel.Warning, Message = "Failed to send message, topic={Topic}, maxAttempts={MaxAttempts}, attempt={Attempt}, endpoints={Endpoints}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void SendMessageFailure(ILogger logger, Exception ex, string topic, int maxAttempts, int attempt, string endpoints, string messageId, string clientId);
+            
+            [LoggerMessage(EventId = 8, Level = LogLevel.Warning, Message = "Failed to send message due to too many request, would attempt to resend after {Delay}, topic={Topic}, maxAttempts={MaxAttempts}, attempt={Attempt}, endpoints={Endpoints}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void SendMessageTooManyRequests(ILogger logger, Exception ex, TimeSpan delay, string topic, int maxAttempts, int attempt, string endpoints, string messageId, string clientId);
+            
+            [LoggerMessage(EventId = 9, Level = LogLevel.Error, Message = "No transaction checker registered, ignore it, messageId={MessageId}, transactionId={TransactionId}, endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void NoTransactionChecker(ILogger logger, string messageId, string transactionId, string endpoints, string clientId);
         }
     }
 }

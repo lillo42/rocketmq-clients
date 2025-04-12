@@ -27,7 +27,7 @@ using Org.Apache.Rocketmq.Error;
 
 namespace Org.Apache.Rocketmq
 {
-    public class SimpleConsumer : Consumer, IAsyncDisposable, IDisposable
+    public partial class SimpleConsumer : Consumer, IAsyncDisposable, IDisposable
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<SimpleConsumer>();
         private readonly ConcurrentDictionary<string /* topic */, SubscriptionLoadBalancer> _subscriptionRouteDataCache;
@@ -82,9 +82,9 @@ namespace Org.Apache.Rocketmq
             try
             {
                 State = State.Starting;
-                Logger.LogInformation($"Begin to start the rocketmq simple consumer, clientId={ClientId}");
+                LogMessages.LogStart(Logger, ClientId);
                 await base.Start();
-                Logger.LogInformation($"The rocketmq simple consumer starts successfully, clientId={ClientId}");
+                LogMessages.LogStartSuccess(Logger, ClientId);
                 State = State.Running;
             }
             catch (Exception)
@@ -111,9 +111,9 @@ namespace Org.Apache.Rocketmq
             try
             {
                 State = State.Stopping;
-                Logger.LogInformation($"Begin to shutdown the rocketmq simple consumer, clientId={ClientId}");
+                LogMessages.LogShutdown(Logger, ClientId);
                 await base.Shutdown();
-                Logger.LogInformation($"Shutdown the rocketmq simple consumer successfully, clientId={ClientId}");
+                LogMessages.LogShutdownSuccess(Logger, ClientId);
                 State = State.Terminated;
             }
             catch (Exception)
@@ -303,8 +303,8 @@ namespace Org.Apache.Rocketmq
             public Builder SetConsumerGroup(string consumerGroup)
             {
                 Preconditions.CheckArgument(null != consumerGroup, "consumerGroup should not be null");
-                Preconditions.CheckArgument(consumerGroup != null && ConsumerGroupRegex.Match(consumerGroup).Success,
-                    $"topic does not match the regex {ConsumerGroupRegex}");
+                Preconditions.CheckArgument(consumerGroup != null && ConsumerGroupRegex().Match(consumerGroup).Success,
+                    $"topic does not match the regex {ConsumerGroupRegex()}");
                 _consumerGroup = consumerGroup;
                 return this;
             }
@@ -336,6 +336,21 @@ namespace Org.Apache.Rocketmq
                 await simpleConsumer.Start();
                 return simpleConsumer;
             }
+        }
+        
+        private static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 100, Level = LogLevel.Information, Message = "Begin to start the rocketmq simple consumer, clientId={ClientId}")]
+            public static partial void LogStart(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 101, Level = LogLevel.Information, Message = "The rocketmq simple consumer starts successfully, clientId={ClientId}")]
+            public static partial void LogStartSuccess(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 102, Level = LogLevel.Information, Message = "Begin to shutdown the rocketmq simple consumer, clientId={ClientId}")]
+            public static partial void LogShutdown(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 103, Level = LogLevel.Information, Message = "Shutdown the rocketmq simple consumer successfully, clientId={ClientId}")]
+            public static partial void LogShutdownSuccess(ILogger logger, string clientId);
         }
     }
 }

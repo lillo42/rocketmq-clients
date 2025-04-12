@@ -28,9 +28,16 @@ using Proto = Apache.Rocketmq.V2;
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]
 namespace Org.Apache.Rocketmq
 {
-    public abstract class Consumer : Client
+    public abstract partial class Consumer : Client
     {
-        internal static readonly Regex ConsumerGroupRegex = new Regex("^[%a-zA-Z0-9_-]+$");
+#if NET6_0
+        private static readonly Regex SConsumerGroupRegex = new("^[%a-zA-Z0-9_-]+$");
+        internal static Regex ConsumerGroupRegex() => SConsumerGroupRegex;
+#else
+        [GeneratedRegex("^[%a-zA-Z0-9_-]+$")]
+        internal static partial Regex ConsumerGroupRegex();
+#endif
+        
         protected readonly string ConsumerGroup;
 
         protected Consumer(ClientConfig clientConfig, string consumerGroup) : base(

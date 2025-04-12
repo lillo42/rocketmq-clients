@@ -30,7 +30,7 @@ using grpcLib = Grpc.Core;
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]
 namespace Org.Apache.Rocketmq
 {
-    public abstract class Client
+    public abstract partial class Client
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<Client>();
 
@@ -88,7 +88,7 @@ namespace Org.Apache.Rocketmq
 
         protected virtual async Task Start()
         {
-            Logger.LogDebug($"Begin to start the rocketmq client, clientId={ClientId}");
+            LogMessages.LogStartBegin(Logger, ClientId);
             foreach (var topic in GetTopics())
             {
                 await FetchTopicRoute(topic);
@@ -100,12 +100,12 @@ namespace Org.Apache.Rocketmq
             ScheduleWithFixedDelay(SyncSettings, SettingsSyncScheduleDelay, SettingsSyncSchedulePeriod,
                 _settingsSyncCts.Token);
             ScheduleWithFixedDelay(Stats, StatsScheduleDelay, StatsSchedulePeriod, _statsCts.Token);
-            Logger.LogDebug($"Start the rocketmq client successfully, clientId={ClientId}");
+            LogMessages.LogStartSuccess(Logger, ClientId);
         }
 
         protected virtual async Task Shutdown()
         {
-            Logger.LogDebug($"Begin to shutdown rocketmq client, clientId={ClientId}");
+            LogMessages.LogShutdownBegin(Logger, ClientId);
             _heartbeatCts.Cancel();
             _topicRouteUpdateCts.Cancel();
             _settingsSyncCts.Cancel();
@@ -113,7 +113,7 @@ namespace Org.Apache.Rocketmq
             NotifyClientTermination();
             await ClientManager.Shutdown();
             ClientMeterManager.Shutdown();
-            Logger.LogDebug($"Shutdown the rocketmq client successfully, clientId={ClientId}");
+            LogMessages.LogShutdownSuccess(Logger, ClientId);
         }
 
         private protected (bool, Session) GetSession(Endpoints endpoints)
@@ -177,9 +177,9 @@ namespace Org.Apache.Rocketmq
                     continue;
                 }
 
-                Logger.LogInformation($"Begin to establish session for endpoints={endpoints}, clientId={ClientId}");
+                LogMessages.LogEstablishSessionBegin(Logger, endpoints, ClientId);
                 await session.SyncSettings(true);
-                Logger.LogInformation($"Establish session for endpoints={endpoints} successfully, clientId={ClientId}");
+                LogMessages.LogEstablishSessionSuccess(Logger, endpoints, ClientId);
             }
 
             _topicRouteCache[topic] = topicRouteData;
@@ -207,7 +207,7 @@ namespace Org.Apache.Rocketmq
         {
             try
             {
-                Logger.LogInformation($"Start to update topic route cache for a new round, clientId={ClientId}");
+                LogMessages.LogUpdateTopicRouteCacheBegin(Logger, ClientId);
                 Dictionary<string, Task<TopicRouteData>> responses = new Dictionary<string, Task<TopicRouteData>>();
 
                 foreach (var topic in GetTopics())
@@ -224,14 +224,13 @@ namespace Org.Apache.Rocketmq
                     }
                     catch (Exception e)
                     {
-                        Logger.LogError(e, $"Failed to update topic route cache, topic={item}");
+                        LogMessages.LogUpdateTopicRouteCacheFailure(Logger, item, e);
                     }
                 }
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"[Bug] unexpected exception raised during topic route cache update, " +
-                                $"clientId={ClientId}");
+                LogMessages.LogUpdateTopicRouteCacheUnexpectedException(Logger, ClientId, e);
             }
         }
 
@@ -244,24 +243,19 @@ namespace Org.Apache.Rocketmq
                 {
                     var (_, session) = GetSession(endpoints);
                     await session.SyncSettings(false);
-                    Logger.LogInformation($"Sync settings to remote, endpoints={endpoints}");
+                    LogMessages.LogSyncSettings(Logger, endpoints);
                 }
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"[Bug] unexpected exception raised during setting sync, clientId={ClientId}");
+                LogMessages.LogSyncSettingsUnexpectedException(Logger, ClientId, e);
             }
         }
 
         private void Stats()
         {
             ThreadPool.GetAvailableThreads(out var availableWorker, out var availableIo);
-            Logger.LogInformation(
-                $"ClientId={ClientId}, ClientVersion={MetadataConstants.Instance.ClientVersion}, " +
-                $".NET Version={Environment.Version}, ThreadCount={ThreadPool.ThreadCount}, " +
-                $"CompletedWorkItemCount={ThreadPool.CompletedWorkItemCount}, " +
-                $"PendingWorkItemCount={ThreadPool.PendingWorkItemCount}, AvailableWorkerThreads={availableWorker}, " +
-                $"AvailableCompletionPortThreads={availableIo}");
+            LogMessages.LogStats(Logger, ClientId, MetadataConstants.Instance.ClientVersion, Environment.Version.ToString(), ThreadPool.ThreadCount, ThreadPool.CompletedWorkItemCount, ThreadPool.PendingWorkItemCount, availableWorker, availableIo);
         }
 
         private protected void ScheduleWithFixedDelay(Action action, TimeSpan delay, TimeSpan period, CancellationToken token)
@@ -277,7 +271,7 @@ namespace Org.Apache.Rocketmq
                     }
                     catch (Exception e)
                     {
-                        Logger.LogError(e, $"Failed to execute scheduled task, ClientId={ClientId}");
+                        LogMessages.LogScheduledTaskFailure(Logger, ClientId, e);
                     }
                     finally
                     {
@@ -302,8 +296,7 @@ namespace Org.Apache.Rocketmq
         {
             var topicRouteData = await FetchTopicRoute0(topic);
             await OnTopicRouteDataFetched(topic, topicRouteData);
-            Logger.LogInformation(
-                $"Fetch topic route successfully, clientId={ClientId}, topic={topic}, topicRouteData={topicRouteData}");
+            LogMessages.LogFetchTopicRouteSuccess(Logger, ClientId, topic, topicRouteData);
             return topicRouteData;
         }
 
@@ -327,8 +320,7 @@ namespace Org.Apache.Rocketmq
                 var code = invocation.Response.Status.Code;
                 if (!Proto.Code.Ok.Equals(code))
                 {
-                    Logger.LogError($"Failed to fetch topic route, clientId={ClientId}, topic={topic}, code={code}, " +
-                                 $"statusMessage={invocation.Response.Status.Message}");
+                    LogMessages.LogFetchTopicRouteFailure(Logger, ClientId, topic, code, invocation.Response.Status.Message, null);
                 }
 
                 StatusChecker.Check(invocation.Response.Status, request, invocation.RequestId);
@@ -338,7 +330,7 @@ namespace Org.Apache.Rocketmq
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"Failed to fetch topic route, clientId={ClientId}, topic={topic}");
+                LogMessages.LogFetchTopicRouteGeneralFailure(Logger, ClientId, topic, e);
                 throw;
             }
         }
@@ -368,29 +360,27 @@ namespace Org.Apache.Rocketmq
 
                         if (code.Equals(Proto.Code.Ok))
                         {
-                            Logger.LogInformation($"Send heartbeat successfully, endpoints={item}, clientId={ClientId}");
+                            LogMessages.LogHeartbeatSuccess(Logger, item, ClientId);
                             if (Isolated.TryRemove(item, out _))
                             {
-                                Logger.LogInformation($"Rejoin endpoints which was isolated before, endpoints={item}, " +
-                                            $"clientId={ClientId}");
+                                LogMessages.LogRejoinEndpoints(Logger, item, ClientId);
                             }
 
                             return;
                         }
 
                         var statusMessage = invocation.Response.Status.Message;
-                        Logger.LogInformation($"Failed to send heartbeat, endpoints={item}, code={code}, " +
-                                    $"statusMessage={statusMessage}, clientId={ClientId}");
+                        LogMessages.LogHeartbeatFailure(Logger, item, code, statusMessage, ClientId);
                     }
                     catch (Exception e)
                     {
-                        Logger.LogError(e, $"Failed to send heartbeat, endpoints={item}");
+                        LogMessages.LogHeartbeatGeneralFailure(Logger, item, e);
                     }
                 }
             }
             catch (Exception e)
             {
-                Logger.LogError(e, $"[Bug] unexpected exception raised during heartbeat, clientId={ClientId}");
+                LogMessages.LogHeartbeatUnexpectedException(Logger, ClientId, e);
             }
         }
 
@@ -405,7 +395,7 @@ namespace Org.Apache.Rocketmq
 
         private async void NotifyClientTermination()
         {
-            Logger.LogInformation($"Notify remote endpoints that current client is terminated, clientId={ClientId}");
+            LogMessages.LogNotifyClientTerminationBegin(Logger, ClientId);
             var endpoints = GetTotalRouteEndpoints();
             var request = WrapNotifyClientTerminationRequest();
             foreach (var item in endpoints)
@@ -418,8 +408,7 @@ namespace Org.Apache.Rocketmq
                 }
                 catch (Exception e)
                 {
-                    Logger.LogError(e, $"Failed to notify client's termination, clientId=${ClientId}, " +
-                                    $"endpoints=${item}");
+                    LogMessages.LogNotifyClientTerminationFailure(Logger, ClientId, item, e);
                 }
             }
         }
@@ -450,15 +439,13 @@ namespace Org.Apache.Rocketmq
         internal virtual void OnRecoverOrphanedTransactionCommand(Endpoints endpoints,
             Proto.RecoverOrphanedTransactionCommand command)
         {
-            Logger.LogWarning($"Ignore orphaned transaction recovery command from remote, which is not expected, " +
-                              $"clientId={ClientId}, endpoints={endpoints}");
+            LogMessages.LogIgnoreOrphanedTransactionCommand(Logger, ClientId, endpoints);
         }
 
         internal virtual async void OnVerifyMessageCommand(Endpoints endpoints, Proto.VerifyMessageCommand command)
         {
             // Only push consumer support message consumption verification.
-            Logger.LogWarning($"Ignore verify message command from remote, which is not expected, clientId={ClientId}, " +
-                        $"endpoints={endpoints}, command={command}");
+            LogMessages.LogIgnoreVerifyMessageCommand(Logger, ClientId, endpoints, command);
             var status = new Proto.Status
             {
                 Code = Proto.Code.Unsupported,
@@ -481,8 +468,7 @@ namespace Org.Apache.Rocketmq
         internal async void OnPrintThreadStackTraceCommand(Endpoints endpoints,
             Proto.PrintThreadStackTraceCommand command)
         {
-            Logger.LogWarning("Ignore thread stack trace printing command from remote because it is still not supported, " +
-                              $"clientId={ClientId}, endpoints={endpoints}");
+            LogMessages.LogIgnoreThreadStackTraceCommand(Logger, ClientId, endpoints);
             var status = new Proto.Status
             {
                 Code = Proto.Code.Unsupported,
@@ -507,6 +493,87 @@ namespace Org.Apache.Rocketmq
             var metric = new Metric(settings.Metric ?? new Proto.Metric());
             ClientMeterManager.Reset(metric);
             GetSettings().Sync(settings);
+        }
+        
+        private static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 1, Level = LogLevel.Debug, Message = "Begin to start the rocketmq client, clientId={ClientId}")]
+            public static partial void LogStartBegin(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 2, Level = LogLevel.Debug, Message = "Start the rocketmq client successfully, clientId={ClientId}")]
+            public static partial void LogStartSuccess(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 3, Level = LogLevel.Debug, Message = "Begin to shutdown rocketmq client, clientId={ClientId}")]
+            public static partial void LogShutdownBegin(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 4, Level = LogLevel.Debug, Message = "Shutdown the rocketmq client successfully, clientId={ClientId}")]
+            public static partial void LogShutdownSuccess(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 5, Level = LogLevel.Information, Message = "Begin to establish session for endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void LogEstablishSessionBegin(ILogger logger, Endpoints endpoints, string clientId);
+
+            [LoggerMessage(EventId = 6, Level = LogLevel.Information, Message = "Establish session for endpoints={Endpoints} successfully, clientId={ClientId}")]
+            public static partial void LogEstablishSessionSuccess(ILogger logger, Endpoints endpoints, string clientId);
+
+            [LoggerMessage(EventId = 7, Level = LogLevel.Information, Message = "Start to update topic route cache for a new round, clientId={ClientId}")]
+            public static partial void LogUpdateTopicRouteCacheBegin(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 8, Level = LogLevel.Error, Message = "Failed to update topic route cache, topic={Topic}")]
+            public static partial void LogUpdateTopicRouteCacheFailure(ILogger logger, string topic, Exception exception);
+
+            [LoggerMessage(EventId = 9, Level = LogLevel.Error, Message = "[Bug] unexpected exception raised during topic route cache update, clientId={ClientId}")]
+            public static partial void LogUpdateTopicRouteCacheUnexpectedException(ILogger logger, string clientId, Exception exception);
+
+            [LoggerMessage(EventId = 10, Level = LogLevel.Information, Message = "Sync settings to remote, endpoints={Endpoints}")]
+            public static partial void LogSyncSettings(ILogger logger, Endpoints endpoints);
+
+            [LoggerMessage(EventId = 11, Level = LogLevel.Error, Message = "[Bug] unexpected exception raised during setting sync, clientId={ClientId}")]
+            public static partial void LogSyncSettingsUnexpectedException(ILogger logger, string clientId, Exception exception);
+
+            [LoggerMessage(EventId = 12, Level = LogLevel.Information, Message = "ClientId={ClientId}, ClientVersion={ClientVersion}, .NET Version={DotNetVersion}, ThreadCount={ThreadCount}, CompletedWorkItemCount={CompletedWorkItemCount}, PendingWorkItemCount={PendingWorkItemCount}, AvailableWorkerThreads={AvailableWorkerThreads}, AvailableCompletionPortThreads={AvailableCompletionPortThreads}")]
+            public static partial void LogStats(ILogger logger, string clientId, string clientVersion, string dotNetVersion, int threadCount, long completedWorkItemCount, long pendingWorkItemCount, int availableWorkerThreads, int availableCompletionPortThreads);
+
+            [LoggerMessage(EventId = 13, Level = LogLevel.Error, Message = "Failed to execute scheduled task, ClientId={ClientId}")]
+            public static partial void LogScheduledTaskFailure(ILogger logger, string clientId, Exception exception);
+
+            [LoggerMessage(EventId = 14, Level = LogLevel.Information, Message = "Fetch topic route successfully, clientId={ClientId}, topic={Topic}, topicRouteData={TopicRouteData}")]
+            public static partial void LogFetchTopicRouteSuccess(ILogger logger, string clientId, string topic, TopicRouteData topicRouteData);
+
+            [LoggerMessage(EventId = 15, Level = LogLevel.Error, Message = "Failed to fetch topic route, clientId={ClientId}, topic={Topic}, code={Code}, statusMessage={StatusMessage}")]
+            public static partial void LogFetchTopicRouteFailure(ILogger logger, string clientId, string topic, Proto.Code code, string statusMessage, Exception exception);
+
+            [LoggerMessage(EventId = 16, Level = LogLevel.Error, Message = "Failed to fetch topic route, clientId={ClientId}, topic={Topic}")]
+            public static partial void LogFetchTopicRouteGeneralFailure(ILogger logger, string clientId, string topic, Exception exception);
+
+            [LoggerMessage(EventId = 17, Level = LogLevel.Information, Message = "Send heartbeat successfully, endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void LogHeartbeatSuccess(ILogger logger, Endpoints endpoints, string clientId);
+
+            [LoggerMessage(EventId = 18, Level = LogLevel.Information, Message = "Rejoin endpoints which was isolated before, endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void LogRejoinEndpoints(ILogger logger, Endpoints endpoints, string clientId);
+
+            [LoggerMessage(EventId = 19, Level = LogLevel.Information, Message = "Failed to send heartbeat, endpoints={Endpoints}, code={Code}, statusMessage={StatusMessage}, clientId={ClientId}")]
+            public static partial void LogHeartbeatFailure(ILogger logger, Endpoints endpoints, Proto.Code code, string statusMessage, string clientId);
+
+            [LoggerMessage(EventId = 20, Level = LogLevel.Error, Message = "Failed to send heartbeat, endpoints={Endpoints}")]
+            public static partial void LogHeartbeatGeneralFailure(ILogger logger, Endpoints endpoints, Exception exception);
+
+            [LoggerMessage(EventId = 21, Level = LogLevel.Error, Message = "[Bug] unexpected exception raised during heartbeat, clientId={ClientId}")]
+            public static partial void LogHeartbeatUnexpectedException(ILogger logger, string clientId, Exception exception);
+
+            [LoggerMessage(EventId = 22, Level = LogLevel.Information, Message = "Notify remote endpoints that current client is terminated, clientId={ClientId}")]
+            public static partial void LogNotifyClientTerminationBegin(ILogger logger, string clientId);
+
+            [LoggerMessage(EventId = 23, Level = LogLevel.Error, Message = "Failed to notify client's termination, clientId={ClientId}, endpoints={Endpoints}")]
+            public static partial void LogNotifyClientTerminationFailure(ILogger logger, string clientId, Endpoints endpoints, Exception exception);
+
+            [LoggerMessage(EventId = 24, Level = LogLevel.Warning, Message = "Ignore orphaned transaction recovery command from remote, which is not expected, clientId={ClientId}, endpoints={Endpoints}")]
+            public static partial void LogIgnoreOrphanedTransactionCommand(ILogger logger, string clientId, Endpoints endpoints);
+
+            [LoggerMessage(EventId = 25, Level = LogLevel.Warning, Message = "Ignore verify message command from remote, which is not expected, clientId={ClientId}, endpoints={Endpoints}, command={Command}")]
+            public static partial void LogIgnoreVerifyMessageCommand(ILogger logger, string clientId, Endpoints endpoints, Proto.VerifyMessageCommand command);
+
+            [LoggerMessage(EventId = 26, Level = LogLevel.Warning, Message = "Ignore thread stack trace printing command from remote because it is still not supported, clientId={ClientId}, endpoints={Endpoints}")]
+            public static partial void LogIgnoreThreadStackTraceCommand(ILogger logger, string clientId, Endpoints endpoints);
         }
     }
 }

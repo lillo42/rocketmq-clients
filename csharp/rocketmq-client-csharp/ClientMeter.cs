@@ -20,7 +20,7 @@ using OpenTelemetry.Metrics;
 
 namespace Org.Apache.Rocketmq
 {
-    public class ClientMeter
+    public partial class ClientMeter
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<ClientMeter>();
 
@@ -58,9 +58,9 @@ namespace Org.Apache.Rocketmq
                 return;
             }
 
-            Logger.LogInformation($"Begin to shutdown the client meter, clientId={ClientId}, endpoints={Endpoints}");
+            LogMessages.ClientMeterShutdownStart(Logger, ClientId, Endpoints);
             MeterProvider.Shutdown();
-            Logger.LogInformation($"Shutdown the client meter successfully, clientId={ClientId}, endpoints={Endpoints}");
+            LogMessages.ClientMeterShutdownSuccess(Logger, ClientId, Endpoints);
         }
 
         public bool Satisfy(Metric metric)
@@ -71,6 +71,15 @@ namespace Org.Apache.Rocketmq
             }
 
             return !Enabled && !metric.On;
+        }
+            
+        public static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 20, Level = LogLevel.Information, Message = "Begin to shutdown the client meter, clientId={ClientId}, endpoints={Endpoints}")]
+            public static partial void ClientMeterShutdownStart(ILogger logger, string clientId, Endpoints endpoints);
+        
+            [LoggerMessage(EventId = 21, Level = LogLevel.Information, Message = "Shutdown the client meter successfully, clientId={ClientId}, endpoints={Endpoints}")]
+            public static partial void ClientMeterShutdownSuccess(ILogger logger, string clientId, Endpoints endpoints);
         }
     }
 }

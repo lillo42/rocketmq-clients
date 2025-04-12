@@ -26,7 +26,7 @@ using OpenTelemetry.Resources;
 
 namespace Org.Apache.Rocketmq
 {
-    public class ClientMeterManager
+    public partial class ClientMeterManager
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<ClientMeterManager>();
         private const string MeterName = "Apache.RocketMQ.Client";
@@ -59,14 +59,13 @@ namespace Org.Apache.Rocketmq
                 var clientId = _client.GetClientId();
                 if (_clientMeter.Satisfy(metric))
                 {
-                    Logger.LogInformation(
-                        $"Metric settings is satisfied by the current message meter, metric={metric}, clientId={clientId}");
+                    LogMessages.MetricSettingsSatisfied(Logger, metric, clientId);
                     return;
                 }
 
                 if (!metric.On)
                 {
-                    Logger.LogInformation($"Metric is off, clientId={clientId}");
+                    LogMessages.MetricOff(Logger, clientId);
                     _clientMeter.Shutdown();
                     _clientMeter = ClientMeter.DisabledInstance(clientId);
                     return;
@@ -105,13 +104,25 @@ namespace Org.Apache.Rocketmq
                 var exist = _clientMeter;
                 _clientMeter = new ClientMeter(metric.Endpoints, meterProvider, clientId);
                 exist.Shutdown();
-                Logger.LogInformation($"Metric is on, endpoints={metric.Endpoints}, clientId={clientId}");
+                LogMessages.MetricOn(Logger, metric.Endpoints, clientId);
             }
         }
 
         public bool IsEnabled()
         {
             return _clientMeter.Enabled;
+        }
+    
+        public static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 10, Level = LogLevel.Information, Message = "Metric settings is satisfied by the current message meter, metric={Metric}, clientId={ClientId}")]
+            public static partial void MetricSettingsSatisfied(ILogger logger, Metric metric, string clientId);
+        
+            [LoggerMessage(EventId = 11, Level = LogLevel.Information, Message = "Metric is off, clientId={ClientId}")]
+            public static partial void MetricOff(ILogger logger, string clientId);
+        
+            [LoggerMessage(EventId = 12, Level = LogLevel.Information, Message = "Metric is on, endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void MetricOn(ILogger logger, Endpoints endpoints, string clientId);
         }
     }
 }

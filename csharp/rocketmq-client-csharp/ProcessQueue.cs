@@ -33,7 +33,7 @@ namespace Org.Apache.Rocketmq
     /// mapped into one process queue to fetch message from remote. If the message queue is removed from the newest 
     /// assignment, the corresponding process queue is marked as expired soon, which means its lifecycle is over.
     /// </summary>
-    public class ProcessQueue
+    public partial class ProcessQueue
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<ProcessQueue>();
 
@@ -123,9 +123,7 @@ namespace Org.Apache.Rocketmq
             {
                 return false;
             }
-            Logger.LogWarning(
-                $"Process queue is idle, idleDuration={idleDuration}, maxIdleDuration={maxIdleDuration}," +
-                $" afterCacheFullDuration={afterCacheFullDuration}, mq={_mq}, clientId={_consumer.GetClientId()}");
+            LogMessages.ProcessQueueIdle(Logger, idleDuration, maxIdleDuration, afterCacheFullDuration, _mq, _consumer.GetClientId());
             return true;
         }
 
@@ -176,7 +174,7 @@ namespace Org.Apache.Rocketmq
         private void ReceiveMessageLater(TimeSpan delay, string attemptId)
         {
             var clientId = _consumer.GetClientId();
-            Logger.LogInformation($"Try to receive message later, mq={_mq}, delay={delay}, clientId={clientId}");
+            LogMessages.TryToReceiveMessageLater(Logger, _mq, delay, clientId);
             Task.Run(async () =>
             {
                 try
@@ -190,7 +188,7 @@ namespace Org.Apache.Rocketmq
                     {
                         return;
                     }
-                    Logger.LogError(ex, $"[Bug] Failed to schedule message receiving request, mq={_mq}, clientId={clientId}");
+                    LogMessages.FailedToScheduleMessageReceivingRequest(Logger, _mq, clientId);
                     OnReceiveMessageException(ex, attemptId);
                 }
             });
@@ -211,12 +209,12 @@ namespace Org.Apache.Rocketmq
             var clientId = _consumer.GetClientId();
             if (_dropped)
             {
-                Logger.LogInformation($"Process queue has been dropped, no longer receive message, mq={_mq}, clientId={clientId}");
+                LogMessages.ProcessQueueDropped(Logger, _mq, clientId);
                 return;
             }
             if (IsCacheFull())
             {
-                Logger.LogWarning($"Process queue cache is full, would receive message later, mq={_mq}, clientId={clientId}");
+                LogMessages.CacheMessagesQuantityExceedsThreshold(Logger, _consumer.CacheMessageCountThresholdPerQueue(), CachedMessagesCount(), _mq, clientId);
                 ReceiveMessageLater(ReceivingBackoffDelayWhenCacheIsFull, attemptId);
                 return;
             }
@@ -233,7 +231,7 @@ namespace Org.Apache.Rocketmq
             var clientId = _consumer.GetClientId();
             if (_consumer.State != State.Running)
             {
-                Logger.LogInformation($"Stop to receive message because consumer is not running, mq={_mq}, clientId={clientId}");
+                LogMessages.ConsumerNotRunning(Logger, _mq, clientId);
                 return;
             }
 
@@ -257,10 +255,8 @@ namespace Org.Apache.Rocketmq
                         {
                             nextAttemptId = request.AttemptId;
                         }
-
-                        Logger.LogError(t.Exception, $"Exception raised during message reception, mq={_mq}," +
-                                                     $" attemptId={request.AttemptId}, nextAttemptId={nextAttemptId}," +
-                                                     $" clientId={clientId}");
+                        
+                        LogMessages.ExceptionRaisedDuringMessageReception(Logger, t.Exception, _mq, request.AttemptId, nextAttemptId, clientId);
                         OnReceiveMessageException(t.Exception, nextAttemptId);
                     }
                     else
@@ -272,9 +268,7 @@ namespace Org.Apache.Rocketmq
                         }
                         catch (Exception ex)
                         {
-                            // Should never reach here.
-                            Logger.LogError($"[Bug] Exception raised while handling receive result, mq={_mq}," +
-                                            $" endpoints={endpoints}, clientId={clientId}, exception={ex}");
+                            LogMessages.ExceptionRaisedWhileHandlingReceiveResult(Logger, ex, _mq, endpoints, clientId);
                             OnReceiveMessageException(ex, attemptId);
                         }
                     }
@@ -282,7 +276,7 @@ namespace Org.Apache.Rocketmq
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, $"Exception raised during message reception, mq={_mq}, clientId={clientId}");
+                LogMessages.ExceptionRaisedDuringMessageReceptionGeneral(Logger, ex, _mq, clientId);
                 OnReceiveMessageException(ex, attemptId);
             }
         }
@@ -305,20 +299,15 @@ namespace Org.Apache.Rocketmq
             var clientId = _consumer.GetClientId();
             if (cacheMessageCountThresholdPerQueue <= actualMessagesQuantity)
             {
-                Logger.LogWarning($"Process queue total cached messages quantity exceeds the threshold," +
-                                  $" threshold={cacheMessageCountThresholdPerQueue}, actual={actualMessagesQuantity}," +
-                                  $" mq={_mq}, clientId={clientId}");
+                LogMessages.CacheMessagesQuantityExceedsThreshold(Logger, cacheMessageCountThresholdPerQueue, actualMessagesQuantity, _mq, clientId);
                 Interlocked.Exchange(ref _cacheFullTime, DateTime.UtcNow.Ticks);
                 return true;
             }
-
             var cacheMessageBytesThresholdPerQueue = _consumer.CacheMessageBytesThresholdPerQueue();
             var actualCachedMessagesBytes = CachedMessageBytes();
             if (cacheMessageBytesThresholdPerQueue <= actualCachedMessagesBytes)
             {
-                Logger.LogWarning($"Process queue total cached messages memory exceeds the threshold," +
-                                  $" threshold={cacheMessageBytesThresholdPerQueue} bytes," +
-                                  $" actual={actualCachedMessagesBytes} bytes, mq={_mq}, clientId={clientId}");
+                LogMessages.CacheMessagesMemoryExceedsThreshold(Logger, cacheMessageBytesThresholdPerQueue, actualCachedMessagesBytes, _mq, clientId);
                 Interlocked.Exchange(ref _cacheFullTime, DateTime.UtcNow.Ticks);
                 return true;
             }
@@ -362,11 +351,7 @@ namespace Org.Apache.Rocketmq
             {
                 if (responseTask.IsFaulted)
                 {
-                    Logger.LogError(responseTask.Exception, $"Exception raised while acknowledging message," +
-                                                            $" would retry later, clientId={clientId}," +
-                                                            $" consumerGroup={consumerGroup}," +
-                                                            $" messageId={messageId}," +
-                                                            $" mq={_mq}, endpoints={endpoints}");
+                    LogMessages.FailedToScheduleMessageAckRequest(Logger, responseTask.Exception, _mq, messageView.MessageId, clientId);
                     AckMessageLater(messageView, attempt + 1, tcs);
                 }
                 else
@@ -375,40 +360,25 @@ namespace Org.Apache.Rocketmq
                     var requestId = invocation.RequestId;
                     var status = invocation.Response.Status;
                     var statusCode = status.Code;
-
                     if (statusCode == Code.InvalidReceiptHandle)
                     {
-                        Logger.LogError($"Failed to ack message due to the invalid receipt handle, forgive to retry," +
-                                        $" clientId={clientId}, consumerGroup={consumerGroup}, messageId={messageId}," +
-                                        $" attempt={attempt}, mq={_mq}, endpoints={endpoints}, requestId={requestId}," +
-                                        $" status message={status.Message}");
+                        LogMessages.FailedToAckMessageInvalidReceiptHandle(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId, status.Message);
                         tcs.SetException(new BadRequestException((int)statusCode, requestId, status.Message));
                     }
-
                     if (statusCode != Code.Ok)
                     {
-                        Logger.LogError(
-                            $"Failed to change invisible duration, would retry later, clientId={clientId}," +
-                            $" consumerGroup={consumerGroup}, messageId={messageId}, attempt={attempt}, mq={_mq}," +
-                            $" endpoints={endpoints}, requestId={requestId}, status message={status.Message}");
+                        LogMessages.FailedToChangeInvisibleDuration(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId, status.Message);
                         AckMessageLater(messageView, attempt + 1, tcs);
                         return;
                     }
-
                     tcs.SetResult(true);
-
                     if (attempt > 1)
                     {
-                        Logger.LogInformation($"Successfully acked message finally, clientId={clientId}," +
-                                              $" consumerGroup={consumerGroup}, messageId={messageId}," +
-                                              $" attempt={attempt}, mq={_mq}, endpoints={endpoints}," +
-                                              $" requestId={requestId}");
+                        LogMessages.SuccessfullyAckedMessageFinally(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId);
                     }
                     else
                     {
-                        Logger.LogDebug($"Successfully acked message, clientId={clientId}," +
-                                        $" consumerGroup={consumerGroup}, messageId={messageId}, mq={_mq}," +
-                                        $" endpoints={endpoints}, requestId={requestId}");
+                        LogMessages.SuccessfullyAckedMessage(Logger, clientId, consumerGroup, messageId, _mq, endpoints, requestId);
                     }
                 }
             }, TaskContinuationOptions.ExecuteSynchronously);
@@ -429,8 +399,7 @@ namespace Org.Apache.Rocketmq
                     {
                         return;
                     }
-                    Logger.LogError(ex, $"[Bug] Failed to schedule message ack request, mq={_mq}," +
-                                        $" messageId={messageView.MessageId}, clientId={_consumer.GetClientId()}");
+                    LogMessages.FailedToScheduleMessageAckRequest(Logger, ex, _mq, messageView.MessageId, _consumer.GetClientId());
                     AckMessageLater(messageView, attempt + 1, tcs);
                 }
             });
@@ -445,8 +414,7 @@ namespace Org.Apache.Rocketmq
             return tcs.Task;
         }
 
-        private void ChangeInvisibleDuration(MessageView messageView, TimeSpan duration, int attempt,
-            TaskCompletionSource<bool> tcs)
+        private void ChangeInvisibleDuration(MessageView messageView, TimeSpan duration, int attempt, TaskCompletionSource<bool> tcs)
         {
             var clientId = _consumer.GetClientId();
             var consumerGroup = _consumer.GetConsumerGroup();
@@ -460,11 +428,7 @@ namespace Org.Apache.Rocketmq
             {
                 if (responseTask.IsFaulted)
                 {
-                    Logger.LogError(responseTask.Exception, $"Exception raised while changing invisible" +
-                                                            $" duration, would retry later, clientId={clientId}," +
-                                                            $" consumerGroup={consumerGroup}," +
-                                                            $" messageId={messageId}, mq={_mq}," +
-                                                            $" endpoints={endpoints}");
+                    LogMessages.FailedToScheduleMessageAckRequest(Logger, responseTask.Exception, _mq, messageView.MessageId, clientId);
                     ChangeInvisibleDurationLater(messageView, duration, attempt + 1, tcs);
                 }
                 else
@@ -473,40 +437,25 @@ namespace Org.Apache.Rocketmq
                     var requestId = invocation.RequestId;
                     var status = invocation.Response.Status;
                     var statusCode = status.Code;
-
                     if (statusCode == Code.InvalidReceiptHandle)
                     {
-                        Logger.LogError($"Failed to change invisible duration due to the invalid receipt handle," +
-                                        $" forgive to retry, clientId={clientId}, consumerGroup={consumerGroup}," +
-                                        $" messageId={messageId}, attempt={attempt}, mq={_mq}, endpoints={endpoints}," +
-                                        $" requestId={requestId}, status message={status.Message}");
+                        LogMessages.FailedToAckMessageInvalidReceiptHandle(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId, status.Message);
                         tcs.SetException(new BadRequestException((int)statusCode, requestId, status.Message));
                     }
-
                     if (statusCode != Code.Ok)
                     {
-                        Logger.LogError($"Failed to change invisible duration, would retry later," +
-                                        $" clientId={clientId}, consumerGroup={consumerGroup}, messageId={messageId}," +
-                                        $" attempt={attempt}, mq={_mq}, endpoints={endpoints}, requestId={requestId}," +
-                                        $" status message={status.Message}");
+                        LogMessages.FailedToChangeInvisibleDuration(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId, status.Message);
                         ChangeInvisibleDurationLater(messageView, duration, attempt + 1, tcs);
                         return;
                     }
-
                     tcs.SetResult(true);
-
                     if (attempt > 1)
                     {
-                        Logger.LogInformation($"Finally, changed invisible duration successfully," +
-                                              $" clientId={clientId}, consumerGroup={consumerGroup}," +
-                                              $" messageId={messageId}, attempt={attempt}, mq={_mq}," +
-                                              $" endpoints={endpoints}, requestId={requestId}");
+                        LogMessages.ChangedInvisibleDurationSuccessfullyFinally(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId);
                     }
                     else
                     {
-                        Logger.LogDebug($"Changed invisible duration successfully, clientId={clientId}," +
-                                        $" consumerGroup={consumerGroup}, messageId={messageId}, mq={_mq}," +
-                                        $" endpoints={endpoints}, requestId={requestId}");
+                        LogMessages.ChangedInvisibleDurationSuccessfully(Logger, clientId, consumerGroup, messageId, _mq, endpoints, requestId);
                     }
                 }
             });
@@ -528,8 +477,7 @@ namespace Org.Apache.Rocketmq
                     {
                         return;
                     }
-                    Logger.LogError(ex, $"[Bug] Failed to schedule message change invisible duration request," +
-                                        $" mq={_mq}, messageId={messageView.MessageId}, clientId={_consumer.GetClientId()}");
+                    LogMessages.FailedToScheduleMessageAckRequest(Logger, ex, _mq, messageView.MessageId, _consumer.GetClientId());
                     ChangeInvisibleDurationLater(messageView, duration, attempt + 1, tcs);
                 }
             });
@@ -548,9 +496,7 @@ namespace Org.Apache.Rocketmq
             {
                 var nextAttemptDelay = retryPolicy.GetNextAttemptDelay(attempt);
                 attempt = messageView.IncrementAndGetDeliveryAttempt();
-                Logger.LogDebug($"Prepare to redeliver the fifo message because of the consumption failure," +
-                                $" maxAttempt={maxAttempts}, attempt={attempt}, mq={messageView.MessageQueue}," +
-                                $" messageId={messageId}, nextAttemptDelay={nextAttemptDelay}, clientId={clientId}");
+                LogMessages.PrepareToRedeliverFifoMessage(Logger, maxAttempts, attempt, messageView.MessageQueue, messageId, nextAttemptDelay, clientId);
                 var redeliverTask = service.Consume(messageView, nextAttemptDelay);
                 _ = redeliverTask.ContinueWith(async t =>
                 {
@@ -563,9 +509,7 @@ namespace Org.Apache.Rocketmq
                 var success = consumeResult == ConsumeResult.SUCCESS;
                 if (!success)
                 {
-                    Logger.LogInformation($"Failed to consume fifo message finally, run out of attempt times," +
-                                          $" maxAttempts={maxAttempts}, attempt={attempt}, mq={messageView.MessageQueue}," +
-                                          $" messageId={messageId}, clientId={clientId}");
+                    LogMessages.FailedToConsumeFifoMessageFinally(Logger, maxAttempts, attempt, messageView.MessageQueue, messageId, clientId);
                 }
 
                 var task = ConsumeResult.SUCCESS.Equals(consumeResult)
@@ -601,12 +545,7 @@ namespace Org.Apache.Rocketmq
             {
                 if (responseTask.IsFaulted)
                 {
-                    // Log failure and retry later.
-                    Logger.LogError($"Exception raised while forward message to DLQ, would attempt to re-forward later, " +
-                                $"clientId={_consumer.GetClientId()}," +
-                                $" consumerGroup={_consumer.GetConsumerGroup()}," +
-                                $" messageId={messageView.MessageId}, mq={_mq}", responseTask.Exception);
-
+                    LogMessages.ExceptionRaisedDuringWhileForwardMessageToDLQ(Logger, responseTask.Exception, clientId, consumerGroup, messageId, _mq);
                     ForwardToDeadLetterQueueLater(messageView, attempt, tcs);
                 }
                 else
@@ -619,12 +558,7 @@ namespace Org.Apache.Rocketmq
                     // Log failure and retry later.
                     if (statusCode != Code.Ok)
                     {
-                        Logger.LogError($"Failed to forward message to dead letter queue," +
-                                        $" would attempt to re-forward later, clientId={clientId}," +
-                                        $" consumerGroup={consumerGroup}, messageId={messageId}," +
-                                        $" attempt={attempt}, mq={_mq}, endpoints={endpoints}," +
-                                        $" requestId={requestId}, code={statusCode}," +
-                                        $" status message={status.Message}");
+                        LogMessages.FailedToForwardMessageToDeadLetterQueue(Logger, clientId, consumerGroup, messageId, attempt, _mq, endpoints, requestId, statusCode, status.Message);
                         ForwardToDeadLetterQueueLater(messageView, attempt, tcs);
                         return;
                     }
@@ -634,17 +568,11 @@ namespace Org.Apache.Rocketmq
                     // Log success.
                     if (attempt > 1)
                     {
-                        Logger.LogInformation($"Re-forward message to dead letter queue successfully, " +
-                                              $"clientId={clientId}, consumerGroup={consumerGroup}," +
-                                              $" attempt={attempt}, messageId={messageId}, mq={_mq}," +
-                                              $" endpoints={endpoints}, requestId={requestId}");
+                        LogMessages.ReForwardMessageToDeadLetterQueueSuccessfully(Logger, clientId, consumerGroup, attempt, messageId, _mq, endpoints, requestId);
                     }
                     else
                     {
-                        Logger.LogInformation($"Forward message to dead letter queue successfully, " +
-                                              $"clientId={clientId}, consumerGroup={consumerGroup}," +
-                                              $" messageId={messageId}, mq={_mq}, endpoints={endpoints}," +
-                                              $" requestId={requestId}");
+                        LogMessages.ForwardMessageToDeadLetterQueueSuccessfully(Logger, clientId, consumerGroup, messageId, _mq, endpoints, requestId);
                     }
                 }
             });
@@ -663,9 +591,7 @@ namespace Org.Apache.Rocketmq
                 catch (Exception ex)
                 {
                     // Should never reach here.
-                    Logger.LogError($"[Bug] Failed to schedule DLQ message request, " +
-                                    $"mq={_mq}, messageId={messageView.MessageId}, clientId={_consumer.GetClientId()}", ex);
-
+                    LogMessages.FailedToScheduleDLQMessageRequest(Logger, ex, _mq, messageView.MessageId, _consumer.GetClientId());
                     ForwardToDeadLetterQueueLater(messageView, attempt + 1, tcs);
                 }
             });
@@ -677,8 +603,7 @@ namespace Org.Apache.Rocketmq
         /// <param name="messageView">the message to discard.</param>
         public void DiscardMessage(MessageView messageView)
         {
-            Logger.LogInformation($"Discard message, mq={_mq}, messageId={messageView.MessageId}," +
-                                  $" clientId={_consumer.GetClientId()}");
+            LogMessages.DiscardMessage(Logger, _mq, messageView.MessageId, _consumer.GetClientId());
             var task = NackMessage(messageView);
             _ = task.ContinueWith(_ =>
             {
@@ -692,8 +617,7 @@ namespace Org.Apache.Rocketmq
         /// <param name="messageView">the FIFO message to discard.</param>
         public void DiscardFifoMessage(MessageView messageView)
         {
-            Logger.LogInformation($"Discard fifo message, mq={_mq}, messageId={messageView.MessageId}," +
-                                  $" clientId={_consumer.GetClientId()}");
+            LogMessages.DiscardFifoMessage(Logger, _mq, messageView.MessageId, _consumer.GetClientId());
             var task = ForwardToDeadLetterQueue(messageView);
             _ = task.ContinueWith(_ =>
             {
@@ -759,6 +683,87 @@ namespace Org.Apache.Rocketmq
         public long GetCachedMessageBytes()
         {
             return _cachedMessagesBytes;
+        }
+        
+        public static partial class LogMessages
+        {
+            [LoggerMessage(EventId = 40, Level = LogLevel.Warning, Message = "Process queue is idle, idleDuration={IdleDuration}, maxIdleDuration={MaxIdleDuration}, afterCacheFullDuration={AfterCacheFullDuration}, mq={Mq}, clientId={ClientId}")]
+            public static partial void ProcessQueueIdle(ILogger logger, long idleDuration, TimeSpan maxIdleDuration, long afterCacheFullDuration, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 41, Level = LogLevel.Information, Message = "Try to receive message later, mq={Mq}, delay={Delay}, clientId={ClientId}")]
+            public static partial void TryToReceiveMessageLater(ILogger logger, MessageQueue mq, TimeSpan delay, string clientId);
+        
+            [LoggerMessage(EventId = 42, Level = LogLevel.Error, Message = "[Bug] Failed to schedule message receiving request, mq={Mq}, clientId={ClientId}")]
+            public static partial void FailedToScheduleMessageReceivingRequest(ILogger logger, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 43, Level = LogLevel.Error, Message = "Exception raised during message reception, mq={Mq}, attemptId={AttemptId}, nextAttemptId={NextAttemptId}, clientId={ClientId}")]
+            public static partial void ExceptionRaisedDuringMessageReception(ILogger logger, Exception exception, MessageQueue mq, string attemptId, string nextAttemptId, string clientId);
+        
+            [LoggerMessage(EventId = 44, Level = LogLevel.Error, Message = "[Bug] Exception raised while handling receive result, mq={Mq}, endpoints={Endpoints}, clientId={ClientId}")]
+            public static partial void ExceptionRaisedWhileHandlingReceiveResult(ILogger logger, Exception exception, MessageQueue mq, Endpoints endpoints, string clientId);
+        
+            [LoggerMessage(EventId = 45, Level = LogLevel.Warning, Message = "Process queue total cached messages quantity exceeds the threshold, threshold={Threshold}, actual={Actual}, mq={Mq}, clientId={ClientId}")]
+            public static partial void CacheMessagesQuantityExceedsThreshold(ILogger logger, int threshold, int actual, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 46, Level = LogLevel.Warning, Message = "Process queue total cached messages memory exceeds the threshold, threshold={Threshold} bytes, actual={Actual} bytes, mq={Mq}, clientId={ClientId}")]
+            public static partial void CacheMessagesMemoryExceedsThreshold(ILogger logger, long threshold, long actual, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 47, Level = LogLevel.Information, Message = "Process queue has been dropped, no longer receive message, mq={Mq}, clientId={ClientId}")]
+            public static partial void ProcessQueueDropped(ILogger logger, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 48, Level = LogLevel.Information, Message = "Stop to receive message because consumer is not running, mq={Mq}, clientId={ClientId}")]
+            public static partial void ConsumerNotRunning(ILogger logger, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 49, Level = LogLevel.Error, Message = "Exception raised during message reception, mq={Mq}, clientId={ClientId}")]
+            public static partial void ExceptionRaisedDuringMessageReceptionGeneral(ILogger logger, Exception exception, MessageQueue mq, string clientId);
+        
+            [LoggerMessage(EventId = 50, Level = LogLevel.Debug, Message = "Successfully acked message, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}")]
+            public static partial void SuccessfullyAckedMessage(ILogger logger, string clientId, string consumerGroup, string messageId, MessageQueue mq, Endpoints endpoints, string requestId);
+        
+            [LoggerMessage(EventId = 51, Level = LogLevel.Information, Message = "Successfully acked message finally, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, attempt={Attempt}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}")]
+            public static partial void SuccessfullyAckedMessageFinally(ILogger logger, string clientId, string consumerGroup, string messageId, int attempt, MessageQueue mq, Endpoints endpoints, string requestId);
+        
+            [LoggerMessage(EventId = 52, Level = LogLevel.Error, Message = "Failed to ack message due to the invalid receipt handle, forgive to retry, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, attempt={Attempt}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}, status message={StatusMessage}")]
+            public static partial void FailedToAckMessageInvalidReceiptHandle(ILogger logger, string clientId, string consumerGroup, string messageId, int attempt, MessageQueue mq, Endpoints endpoints, string requestId, string statusMessage);
+        
+            [LoggerMessage(EventId = 53, Level = LogLevel.Error, Message = "Failed to change invisible duration, would retry later, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, attempt={Attempt}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}, status message={StatusMessage}")]
+            public static partial void FailedToChangeInvisibleDuration(ILogger logger, string clientId, string consumerGroup, string messageId, int attempt, MessageQueue mq, Endpoints endpoints, string requestId, string statusMessage);
+        
+            [LoggerMessage(EventId = 54, Level = LogLevel.Debug, Message = "Changed invisible duration successfully, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}")]
+            public static partial void ChangedInvisibleDurationSuccessfully(ILogger logger, string clientId, string consumerGroup, string messageId, MessageQueue mq, Endpoints endpoints, string requestId);
+        
+            [LoggerMessage(EventId = 55, Level = LogLevel.Information, Message = "Finally, changed invisible duration successfully, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, attempt={Attempt}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}")]
+            public static partial void ChangedInvisibleDurationSuccessfullyFinally(ILogger logger, string clientId, string consumerGroup, string messageId, int attempt, MessageQueue mq, Endpoints endpoints, string requestId);
+        
+            [LoggerMessage(EventId = 56, Level = LogLevel.Error, Message = "[Bug] Failed to schedule message ack request, mq={Mq}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void FailedToScheduleMessageAckRequest(ILogger logger, Exception exception, MessageQueue mq, string messageId, string clientId);
+        
+            [LoggerMessage(EventId = 57, Level = LogLevel.Debug, Message = "Prepare to redeliver the fifo message because of the consumption failure, maxAttempt={MaxAttempts}, attempt={Attempt}, mq={Mq}, messageId={MessageId}, nextAttemptDelay={NextAttemptDelay}, clientId={ClientId}")]
+            public static partial void PrepareToRedeliverFifoMessage(ILogger logger, int maxAttempts, int attempt, MessageQueue mq, string messageId, TimeSpan nextAttemptDelay, string clientId);
+        
+            [LoggerMessage(EventId = 58, Level = LogLevel.Information, Message = "Failed to consume fifo message finally, run out of attempt times, maxAttempts={MaxAttempts}, attempt={Attempt}, mq={Mq}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void FailedToConsumeFifoMessageFinally(ILogger logger, int maxAttempts, int attempt, MessageQueue mq, string messageId, string clientId);
+        
+            [LoggerMessage(EventId = 59, Level = LogLevel.Information, Message = "Forward message to dead letter queue successfully, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}")]
+            public static partial void ForwardMessageToDeadLetterQueueSuccessfully(ILogger logger, string clientId, string consumerGroup, string messageId, MessageQueue mq, Endpoints endpoints, string requestId);
+        
+            [LoggerMessage(EventId = 60, Level = LogLevel.Information, Message = "Re-forward message to dead letter queue successfully, clientId={ClientId}, consumerGroup={ConsumerGroup}, attempt={Attempt}, messageId={MessageId}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}")]
+            public static partial void ReForwardMessageToDeadLetterQueueSuccessfully(ILogger logger, string clientId, string consumerGroup, int attempt, string messageId, MessageQueue mq, Endpoints endpoints, string requestId);
+        
+            [LoggerMessage(EventId = 61, Level = LogLevel.Error, Message = "Failed to forward message to dead letter queue, would attempt to re-forward later, clientId={ClientId}, consumerGroup={ConsumerGroup}, messageId={MessageId}, attempt={Attempt}, mq={Mq}, endpoints={Endpoints}, requestId={RequestId}, code={Code}, status message={StatusMessage}")]
+            public static partial void FailedToForwardMessageToDeadLetterQueue(ILogger logger, string clientId, string consumerGroup, string messageId, int attempt, MessageQueue mq, Endpoints endpoints, string requestId, Code code, string statusMessage);
+            
+            [LoggerMessage(EventId = 62, Level = LogLevel.Error, Message = "[Bug] Failed to schedule DLQ message request, mq={Mq}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void FailedToScheduleDLQMessageRequest(ILogger logger, Exception exception, MessageQueue mq, string messageId, string clientId);
+        
+            [LoggerMessage(EventId = 63, Level = LogLevel.Information, Message = "Discard message, mq={Mq}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void DiscardMessage(ILogger logger, MessageQueue mq, string messageId, string clientId);
+        
+            [LoggerMessage(EventId = 64, Level = LogLevel.Information, Message = "Discard fifo message, mq={Mq}, messageId={MessageId}, clientId={ClientId}")]
+            public static partial void DiscardFifoMessage(ILogger logger, MessageQueue mq, string messageId, string clientId);
+            
+            [LoggerMessage(EventId = 65, Level = LogLevel.Error, Message = "Exception raised while forward message to DLQ, would attempt to re-forward later, clientId={ClientId}, consumerGroup={consumerGroup}, messageId={MessageId}, mq={Mq}")]
+            public static partial void ExceptionRaisedDuringWhileForwardMessageToDLQ(ILogger logger, Exception exception, string clientId, string consumerGroup, string messageId, MessageQueue mq);
         }
     }
 }

@@ -25,7 +25,7 @@ using Proto = Apache.Rocketmq.V2;
 namespace Org.Apache.Rocketmq
 {
     // refer to  https://learn.microsoft.com/en-us/aspnet/core/grpc/client?view=aspnetcore-7.0#bi-directional-streaming-call.
-    public class Session
+    public partial class Session
     {
         private static readonly ILogger Logger = MqLogManager.CreateLogger<Session>();
 
@@ -91,43 +91,55 @@ namespace Org.Apache.Rocketmq
                     {
                         case Proto.TelemetryCommand.CommandOneofCase.Settings:
                             {
-                                Logger.LogInformation(
-                                    $"Receive setting from remote, endpoints={_endpoints}, clientId={_client.GetClientId()}");
+                                LogMessages.ReceiveSettingFromRemote(Logger, _endpoints, _client.GetClientId());
                                 _client.OnSettingsCommand(_endpoints, response.Settings);
                                 _event.Set();
                                 break;
                             }
                         case Proto.TelemetryCommand.CommandOneofCase.RecoverOrphanedTransactionCommand:
                             {
-                                Logger.LogInformation(
-                                    $"Receive orphaned transaction recovery command from remote, endpoints={_endpoints}, clientId={_client.GetClientId()}");
-                                _client.OnRecoverOrphanedTransactionCommand(_endpoints,
-                                    response.RecoverOrphanedTransactionCommand);
+                                LogMessages.ReceiveOrphanedTransactionRecoveryCommand(Logger, _endpoints, _client.GetClientId());
+                                _client.OnRecoverOrphanedTransactionCommand(_endpoints, response.RecoverOrphanedTransactionCommand);
                                 break;
                             }
                         case Proto.TelemetryCommand.CommandOneofCase.VerifyMessageCommand:
                             {
-                                Logger.LogInformation(
-                                    $"Receive message verification command from remote, endpoints={_endpoints}, clientId={_client.GetClientId()}");
+                                LogMessages.ReceiveMessageVerificationCommand(Logger, _endpoints, _client.GetClientId());
                                 _client.OnVerifyMessageCommand(_endpoints, response.VerifyMessageCommand);
                                 break;
                             }
                         case Proto.TelemetryCommand.CommandOneofCase.PrintThreadStackTraceCommand:
                             {
-                                Logger.LogInformation(
-                                    $"Receive thread stack print command from remote, endpoints={_endpoints}, clientId={_client.GetClientId()}");
+                                LogMessages.ReceiveThreadStackPrintCommand(Logger, _endpoints, _client.GetClientId());
                                 _client.OnPrintThreadStackTraceCommand(_endpoints, response.PrintThreadStackTraceCommand);
                                 break;
                             }
                         default:
                             {
-                                Logger.LogWarning(
-                                    $"Receive unrecognized command from remote, endpoints={_endpoints}, command={response}, clientId={_client.GetClientId()}");
+                                LogMessages.ReceiveUnrecognizedCommand(Logger, _endpoints, response, _client.GetClientId());
                                 break;
                             }
                     }
                 }
             });
         }
-    };
+        
+       public static partial class LogMessages
+       {
+           [LoggerMessage(EventId = 30, Level = LogLevel.Information, Message = "Receive setting from remote, endpoints={Endpoints}, clientId={ClientId}")]
+           public static partial void ReceiveSettingFromRemote(ILogger logger, Endpoints endpoints, string clientId);
+       
+           [LoggerMessage(EventId = 31, Level = LogLevel.Information, Message = "Receive orphaned transaction recovery command from remote, endpoints={Endpoints}, clientId={ClientId}")]
+           public static partial void ReceiveOrphanedTransactionRecoveryCommand(ILogger logger, Endpoints endpoints, string clientId);
+       
+           [LoggerMessage(EventId = 32, Level = LogLevel.Information, Message = "Receive message verification command from remote, endpoints={Endpoints}, clientId={ClientId}")]
+           public static partial void ReceiveMessageVerificationCommand(ILogger logger, Endpoints endpoints, string clientId);
+       
+           [LoggerMessage(EventId = 33, Level = LogLevel.Information, Message = "Receive thread stack print command from remote, endpoints={Endpoints}, clientId={ClientId}")]
+           public static partial void ReceiveThreadStackPrintCommand(ILogger logger, Endpoints endpoints, string clientId);
+       
+           [LoggerMessage(EventId = 34, Level = LogLevel.Warning, Message = "Receive unrecognized command from remote, endpoints={Endpoints}, command={Command}, clientId={ClientId}")]
+           public static partial void ReceiveUnrecognizedCommand(ILogger logger, Endpoints endpoints, Proto.TelemetryCommand command, string clientId);
+        } 
+    }
 }
